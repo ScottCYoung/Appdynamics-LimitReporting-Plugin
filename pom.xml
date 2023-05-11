@@ -73,7 +73,7 @@
                     <archive>
                         <addMavenDescriptor>false</addMavenDescriptor>
                         <manifestEntries>
-                            <Plugin-Classes>com.cisco.josouthe.LimitReportingInterceptor</Plugin-Classes>
+                            <Plugin-Classes>com.cisco.josouthe.LimitInformerInterceptor</Plugin-Classes>
                         </manifestEntries>
                     </archive>
                     <outputDirectory>${basedir}</outputDirectory>

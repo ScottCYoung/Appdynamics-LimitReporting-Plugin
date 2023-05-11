@@ -5,19 +5,22 @@ import com.appdynamics.agent.api.Transaction;
 import com.appdynamics.agent.api.impl.NoOpTransaction;
 import com.appdynamics.instrumentation.sdk.Rule;
 import com.appdynamics.instrumentation.sdk.SDKClassMatchType;
+import com.appdynamics.instrumentation.sdk.SDKStringMatchType;
+import com.appdynamics.instrumentation.sdk.template.AGenericInterceptor;
 import com.appdynamics.instrumentation.sdk.toolbox.reflection.IReflector;
 import com.appdynamics.instrumentation.sdk.toolbox.reflection.ReflectorException;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
-public class LimitInformerInterceptor {
+public class LimitInformerInterceptor extends AGenericInterceptor {
 
     IReflector getName;
 
     IReflector getCorrelationID, get;
 
-    public MessageProcessorInterceptor() {
+    public LimitInformerInterceptor() {
         getName = getNewReflectionBuilder().invokeInstanceMethod("getName", true).build(); //String
         getCorrelationID = getNewReflectionBuilder().accessFieldValue( "correlationID", true ).build(); //CorrelationId
         get = getNewReflectionBuilder().invokeInstanceMethod("get", true, new String[]{ String.class.getCanonicalName() }).build();
@@ -25,32 +28,52 @@ public class LimitInformerInterceptor {
 
     @Override
     public Object onMethodBegin(Object objectIntercepted, String className, String methodName, Object[] params) {
-        Object circuit = params[0];
-        Object message = params[1];
-        getLogger().info(String.format("onMethodBegin %s.%s( %s )[%d]", className, methodName, paramsToString(params), (params != null ? params.length : 0)));
-        Transaction transaction = AppdynamicsAgent.getTransaction();
-        if( transaction instanceof NoOpTransaction ) {
-            getLogger().info("BT not active for Message: "+ String.valueOf(message));
-        } else {
-            getLogger().info("BT "+ transaction.getUniqueIdentifier() +" active for Message: "+ String.valueOf(message));
-        }
-        String circuitName = "UNKNOWN-CIRCUIT";
-        try {
-            circuitName = (String) getName.execute(circuit.getClass().getClassLoader(), circuit);
-        } catch (ReflectorException e) {
-            getLogger().info("Reflection exception on call to getName() of Circuit, exception: "+ e.getMessage());
-        }
-        getLogger().info(String.format("Circuit name: %s", circuitName));
 
-        String correlationID = "NOT-SET";
-        try {
-            correlationID = String.valueOf(getCorrelationID.execute(params[1].getClass().getClassLoader(), message));
-        } catch (ReflectorException e) {
-            getLogger().info("Reflection exception on call to access correlationID of Message, exception: "+ e.getMessage());
-        }
-        getLogger().info(String.format("CorrelationID: %s", correlationID));
+        switch (methodName) {
+            case "throwCappedAgentEvent": {
+                if( params.length < 6 ) return null;
+/*  public void throwCappedAgentEvent(EventType type, NotificationSeverity severity, String message, Map<String, String> details, EntityDefinition entityDefinition, String subType) {
+        AgentEventData agentEventData = new AgentEventData(ClockUtils.getCurrentTime(), severity, type, details, message);
+        agentEventData.setTriggeredEntity(entityDefinition);
+        agentEventData.setSubType(subType);
+        this.eventGenerationService.addApplicationEventIgnoreLimits(agentEventData);
+        this.lastGeneratedEvents.put(String.valueOf(type), new ADLong(ClockUtils.getCurrentTime()));
+    }
+*/
+                AppdynamicsAgent.getEventPublisher().publishEvent(String.valueOf(params[2]), "WARN", "AGENT_METRIC_REG_LIMIT_REACHED", (Map<String,String>)params[3]);
+                break;
+            }
+            case "throwCappedInternalEvent": {
+/*
+    public void throwCappedInternalEvent(EventType type, NotificationSeverity severity, String message, Map<String, String> details, Map<String, Object> properties) {
+        AgentEventData agentEventData = new AgentEventData(ClockUtils.getCurrentTime(), severity, type, details, message);
+        agentEventData.setEventProperties(properties);
+        this.eventGenerationService.addApplicationEventIgnoreLimits(agentEventData);
+        this.lastGeneratedEvents.put(String.valueOf(type), new ADLong(ClockUtils.getCurrentTime()));
+    }
 
-        getLogger().info(String.format("Naive correlation header read: %s = %s", AppdynamicsAgent.TRANSACTION_CORRELATION_HEADER, getCorrelationHeader(message)));
+    public void throwCappedInternalEvent(String eventTypeKey, String message, Map<String, String> details) {
+        this.eventGenerationService.addApplicationEventIgnoreLimits(new AgentEventData(ClockUtils.getCurrentTime(), NotificationSeverity.WARN, EventType.AGENT_EVENT, details, message));
+        this.lastGeneratedEvents.put(eventTypeKey, new ADLong(ClockUtils.getCurrentTime()));
+    }
+ */
+                String message = "UNKNOWN";
+                Map<String,String> details = null;
+                if( params.length == 5) {
+                    message = (String) params[2];
+                    details = (Map<String, String>) params[3];
+                } else if( params.length == 3 ) {
+                    message = (String) params[1];
+                    details = (Map<String, String>) params[2];
+                } else {
+                    //oops
+                }
+                AppdynamicsAgent.getEventPublisher().publishEvent(message, "WARN", "AGENT_METRIC_REG_LIMIT_REACHED", details);
+
+                break;
+            }
+        }
+
         return null;
     }
 
@@ -63,9 +86,17 @@ public class LimitInformerInterceptor {
     public List<Rule> initializeRules() {
         List<Rule> rules = new ArrayList<>();
         rules.add(new Rule.Builder(
-                "com.vordel.circuit.MessageProcessor")
+                "com.singularity.ee.agent.commonservices.eventgeneration.events.InternalEventGenerator")
                 .classMatchType(SDKClassMatchType.INHERITS_FROM_CLASS)
-                .methodMatchString("invoke")
+                .methodMatchString("throwCappedAgentEvent")
+                .methodStringMatchType(SDKStringMatchType.EQUALS)
+                .build()
+        );
+        rules.add(new Rule.Builder(
+                "com.singularity.ee.agent.commonservices.eventgeneration.events.InternalEventGenerator")
+                .classMatchType(SDKClassMatchType.INHERITS_FROM_CLASS)
+                .methodMatchString("throwCappedInternalEvent")
+                .methodStringMatchType(SDKStringMatchType.EQUALS)
                 .build()
         );
         return rules;
